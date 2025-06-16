@@ -1,0 +1,169 @@
+---
+title: "Normalisation methods analysis"
+format: html
+editor: visual
+---
+
+# Normalisation method comparison
+
+#### Introduction
+
+This document provides a clean, optimised workflow for performing various normalisation techniques on metabolomics data and calculating relative standard deviation (RSD) for each method.
+
+```{r}
+# Loading libraries
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(pmp)
+library(SummarizedExperiment)
+
+```
+
+Loading data
+
+```{r}
+# Load Raw Data with Two Headers (Sample IDs and Group Names)
+raw_df <- read_csv("metabolomic_MATRIX.csv", col_names = FALSE)
+
+# Extract Sample IDs and Group Labels
+sample_ids <- as.character(raw_df[1, -1])   # First row (Sample IDs)
+group_labels <- as.character(raw_df[2, -1]) # Second row (Group Names)
+
+# Create a Cleaned-Up Matrix (No Headers)
+met_data <- raw_df[-c(1, 2), ]
+colnames(met_data) <- c("Metabolite", sample_ids)
+metabolite_names <- met_data$Metabolite
+intensity_matrix <- met_data %>%
+  select(-Metabolite) %>%
+  mutate_all(as.numeric)
+rownames(intensity_matrix) <- metabolite_names
+
+```
+
+Normalisation techniques
+
+```{r}
+# 3.1 Raw (No Normalisation)
+raw_normalised <- intensity_matrix
+
+# 3.2 Median Normalisation
+median_normalised <- sweep(intensity_matrix, 2, apply(intensity_matrix, 2, median, na.rm = TRUE), "/")
+
+# 3.3 Total Area Normalisation (TAN)
+tan_normalised <- sweep(intensity_matrix, 2, colSums(intensity_matrix, na.rm = TRUE), "/")
+
+# 3.4 Sum Normalisation
+sum_normalised <- sweep(intensity_matrix, 2, colSums(intensity_matrix, na.rm = TRUE), "/")
+
+# 3.5 PQN Normalisation using pmp package
+samples_info <- data.frame(id = sample_ids, group = group_labels)
+rownames(samples_info) <- sample_ids
+
+se_raw <- SummarizedExperiment(
+  assays = list(counts = as.matrix(intensity_matrix)),
+  colData = samples_info
+)
+
+# Apply PQN Normalisation
+se_pqn <- pqn_normalisation(df = se_raw, classes = samples_info$group, qc_label = "Cell21")
+pqn_normalised <- assay(se_pqn)
+
+# 3.6 Applying GLOG Transformation
+glog_transform <- function(x) log((x + sqrt(x^2 + 1)) / 2)
+median_glog_normalised <- apply(median_normalised, 2, glog_transform)
+tan_glog_normalised <- apply(tan_normalised, 2, glog_transform)
+sum_glog_normalised <- apply(sum_normalised, 2, glog_transform)
+pqn_glog_normalised <- apply(pqn_normalised, 2, glog_transform)
+
+```
+
+Saving normalisation
+
+```{r}
+write.csv(raw_normalised, "Raw_Normalised.csv", row.names = TRUE)
+write.csv(median_normalised, "Median_Normalised.csv", row.names = TRUE)
+write.csv(tan_normalised, "TAN_Normalised.csv", row.names = TRUE)
+write.csv(sum_normalised, "Sum_Normalised.csv", row.names = TRUE)
+write.csv(pqn_normalised, "PQN_Normalised.csv", row.names = TRUE)
+write.csv(median_glog_normalised, "Median_GLOG_Normalised.csv", row.names = TRUE)
+write.csv(tan_glog_normalised, "TAN_GLOG_Normalised.csv", row.names = TRUE)
+write.csv(sum_glog_normalised, "Sum_GLOG_Normalised.csv", row.names = TRUE)
+write.csv(pqn_glog_normalised, "PQN_GLOG_Normalised.csv", row.names = TRUE)
+
+```
+
+RSD calculation function
+
+```{r}
+# Function to Calculate Robust RSD (Trims Outliers)
+calculate_robust_rsd <- function(df, method_name) {
+  rsd_values <- apply(df, 1, function(x) {
+    x <- sort(x, na.last = NA)
+    trimmed_x <- x[round(0.05 * length(x)) : round(0.95 * length(x))]
+    if (mean(trimmed_x, na.rm = TRUE) == 0) return(NA)
+    else return(sd(trimmed_x, na.rm = TRUE) / mean(trimmed_x, na.rm = TRUE) * 100)
+  })
+  
+  data.frame(Metabolite = rownames(df), RSD = rsd_values, Method = method_name)
+}
+
+```
+
+```{r}
+rsd_raw <- calculate_robust_rsd(raw_normalised, "Raw")
+rsd_median <- calculate_robust_rsd(median_normalised, "Median")
+rsd_tan <- calculate_robust_rsd(tan_normalised, "TAN")
+rsd_sum <- calculate_robust_rsd(sum_normalised, "Sum")
+rsd_pqn <- calculate_robust_rsd(pqn_normalised, "PQN")
+rsd_median_glog <- calculate_robust_rsd(median_glog_normalised, "Median_GLOG")
+rsd_tan_glog <- calculate_robust_rsd(tan_glog_normalised, "TAN_GLOG")
+rsd_sum_glog <- calculate_robust_rsd(sum_glog_normalised, "Sum_GLOG")
+rsd_pqn_glog <- calculate_robust_rsd(pqn_glog_normalised, "PQN_GLOG")
+
+# Combine RSD Data
+all_rsd <- rbind(
+  rsd_raw, rsd_median, rsd_tan, rsd_sum, rsd_pqn,
+  rsd_median_glog, rsd_tan_glog, rsd_sum_glog, rsd_pqn_glog
+)
+write.csv(all_rsd, "All_RSD_Values.csv", row.names = FALSE)
+
+```
+
+Calculating for each method
+
+```{r}
+
+```
+
+RSD comparison plot
+
+```{r}
+ggplot(all_rsd, aes(x = Method, y = RSD, fill = Method)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  theme_minimal() +
+  labs(
+    title = "Robust RSD Comparison of Normalisation Methods",
+    y = "RSD (%)",
+    x = "Normalisation Method"
+  ) +
+  theme(legend.position = "none")
+
+```
+
+Zoomed in
+
+```{r}
+# Enhanced RSD Comparison Plot (Clipped to ±500%)
+ggplot(all_rsd, aes(x = Method, y = RSD, fill = Method)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  theme_minimal() +
+  labs(
+    title = "Robust RSD Comparison of Normalisation Methods (Clipped to ±500%)",
+    y = "RSD (%)",
+    x = "Normalisation Method"
+  ) +
+  theme(legend.position = "none") +
+  scale_y_continuous(limits = c(-500, 500))
+
+```
